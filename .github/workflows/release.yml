@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - v*
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,7 +13,7 @@ jobs:
   goreleaser:
     permissions:
       contents: write
-    runs-on: oracle-vm-24cpu-96gb-x86-64
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-latest' || 'oracle-vm-24cpu-96gb-x86-64' }}
     timeout-minutes: 60
     outputs:
       hashes: ${{ steps.hash.outputs.hashes }}
@@ -23,6 +24,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -30,6 +32,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Run GoReleaser
+        if: github.event_name == 'push'
         uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89
         id: run-goreleaser
         with:
@@ -39,7 +42,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Run GoReleaser snapshot
+        if: github.event_name == 'workflow_dispatch'
+        uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89
+        with:
+          version: latest
+          distribution: goreleaser
+          args: release --snapshot --clean --skip=validate
+
+      - name: Upload snapshot artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dragonfly-snapshot-artifacts
+          path: dist
+          if-no-files-found: error
+
       - name: Generate subject
+        if: github.event_name == 'push'
         id: hash
         env:
           ARTIFACTS: '${{ steps.run-goreleaser.outputs.artifacts }}'
@@ -53,10 +73,12 @@ jobs:
           echo "hashes=$hashes" >> $GITHUB_OUTPUT
 
       - name: Set tag output
+        if: github.event_name == 'push'
         id: tag
         run: echo "tag_name=${GITHUB_REF#refs/*/}" >> "$GITHUB_OUTPUT"
 
   provenance:
+    if: github.event_name == 'push'
     needs: [goreleaser]
     permissions:
       id-token: write
@@ -67,6 +89,7 @@ jobs:
       base64-subjects: '${{ needs.goreleaser.outputs.hashes }}'
 
   upload-provenance:
+    if: github.event_name == 'push'
     needs: [goreleaser, provenance]
     permissions:
       contents: write
@@ -77,6 +100,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          persist-credentials: false
 
       - name: Download SLSA provenance artifacts
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
